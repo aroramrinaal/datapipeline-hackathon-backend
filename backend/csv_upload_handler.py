@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 BUCKET_NAME = 'uploadedcsvfiles'
 
 def lambda_handler(event, context):
-    # Handle OPTIONS request for CORS preflight
+
     if event.get('httpMethod') == 'OPTIONS':
         return {
             'statusCode': 200,
