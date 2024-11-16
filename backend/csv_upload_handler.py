@@ -21,16 +21,16 @@ def lambda_handler(event, context):
         }
 
     # The file content is assumed to be passed in the 'body' of the event, base64-encoded
-    file_content = event.get("body")  # Placeholder for testing
+    file_content = event.get("body")
     file_name = event.get("queryStringParameters", {}).get("file_name", "")
+    request_type = event.get("queryStringParameters", {}).get("request_type", "upload")
     
-    # Generate unique filename using timestamp if no name provided
+    # Generate unique filename if not provided
     if not file_name:
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_name = f"uploaded_file_{timestamp}.csv"
     
-    # Initialize S3 client with special config for large files
     s3_client = boto3.client('s3',
         config=Config(
             s3={'addressing_style': 'path'},
@@ -40,23 +40,50 @@ def lambda_handler(event, context):
     )
     
     try:
-        # Upload with additional parameters for large files
-        s3_client.put_object(
-            Bucket=BUCKET_NAME,
-            Key=file_name,
-            Body=file_content,
-            ContentType='text/csv'
-        )
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS'
-            },
-            'body': json.dumps({'message': f"File '{file_name}' uploaded successfully to S3!"})
-        }
+        # If requesting presigned URL (for large files)
+        if request_type == "presigned":
+            presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': file_name,
+                    'ContentType': 'text/csv'
+                },
+                ExpiresIn=3600  # URL expires in 1 hour
+            )
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+                },
+                'body': json.dumps({
+                    'presigned_url': presigned_url,
+                    'file_name': file_name
+                })
+            }
+        
+        # Direct upload for small files
+        else:
+            s3_client.put_object(
+                Bucket=BUCKET_NAME,
+                Key=file_name,
+                Body=file_content,
+                ContentType='text/csv'
+            )
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+                },
+                'body': json.dumps({'message': f"File '{file_name}' uploaded successfully to S3!"})
+            }
+            
     except ClientError as e:
         return {
             'statusCode': 500,
