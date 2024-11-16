@@ -1,0 +1,29 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowSSORoleAccess",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::861276087192:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ExternalHackathonUser_4fe09f4e4fd24f17"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+            ],
+            "Resource": "arn:aws:s3:::uploadedcsvfiles/*"
+        },
+        {
+            "Sid": "AllowAccessKeyAccess",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::861276087192:user/aroramrinaal"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+            ],
+            "Resource": "arn:aws:s3:::uploadedcsvfiles/*"
+        }
+    ]
+}
