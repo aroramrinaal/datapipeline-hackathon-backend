@@ -56,11 +56,15 @@ def get_cognito_token():
 def read_csv_from_s3(bucket_name, file_key):
     """Read CSV file content from S3."""
     try:
+        print(f"Attempting to read file {file_key} from bucket {bucket_name}")
         s3_client = boto3.client('s3')
         response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
-        return response['Body'].read().decode('utf-8')
+        content = response['Body'].read().decode('utf-8')
+        print(f"Successfully read file. First 100 chars: {content[:100]}")
+        return content
     except Exception as e:
-        raise Exception(f"Failed to read file from S3: {e}")
+        print(f"Error reading file from S3: {str(e)}")
+        raise Exception(f"Failed to read file from S3: {str(e)}")
 
         
 
@@ -172,23 +176,83 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
 
 def lambda_handler(event, context):
     """Main Lambda Handler."""
+    # Updated CORS headers with specific allowed headers
+    cors_headers = {
+        'Access-Control-Allow-Origin': 'http://localhost:5173',
+        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET',
+        'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization',  # Explicitly list allowed headers
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Expose-Headers': '*'
+    }
+    
+    # Handle preflight OPTIONS request
+    if event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
+        return {
+            'statusCode': 200,
+            'headers': cors_headers,
+            'body': ''
+        }
+    
     try:
-        if 'file_path' not in event:
-            raise Exception("file_path is required in the event")
+        # Parse the request body
+        print("Received event:", json.dumps(event))
+        
+        body = json.loads(event.get('body', '{}'))
+        file_path = body.get('file_path')
+        
+        if not file_path:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': 'file_path is required in the request body'
+                })
+            }
             
-        file_path = event['file_path']
         bucket_name = "uploadedcsvfiles"
         
-        csv_data = read_csv_from_s3(bucket_name, file_path)
-        metadata = generate_metadata_via_llm(csv_data)
+        print(f"Processing file: {file_path} from bucket: {bucket_name}")
         
-        # Return the metadata directly without wrapping it in another JSON object
-        return metadata
+        try:
+            csv_data = read_csv_from_s3(bucket_name, file_path)
+        except Exception as e:
+            print(f"Failed to read CSV: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': f'Failed to read CSV file: {str(e)}'
+                })
+            }
+            
+        try:
+            metadata = generate_metadata_via_llm(csv_data)
+        except Exception as e:
+            print(f"Failed to generate metadata: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': f'Failed to generate metadata: {str(e)}'
+                })
+            }
+        
+        return {
+            'statusCode': 200,
+            'headers': cors_headers,
+            'body': json.dumps(metadata)
+        }
         
     except Exception as e:
         print(f"Error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         return {
-            'message': 'Failed to generate metadata.',
-            'error': str(e)
+            'statusCode': 500,
+            'headers': cors_headers,
+            'body': json.dumps({
+                'message': f'Failed to process request: {str(e)}'
+            })
         }
 
