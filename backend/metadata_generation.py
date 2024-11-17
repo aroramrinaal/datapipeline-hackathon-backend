@@ -73,16 +73,61 @@ def generate_metadata_via_llm(csv_data):
         "Authorization": f"Bearer {get_cognito_token()}"
     }
     prompt = f"""
-    You are a data analysis assistant. The following is a CSV dataset. Please generate metadata:
-    - Total rows and columns.
-    - Column names and their data types.
-    - Missing value counts for each column.
-    - Unique value counts for each column.
+    You are a data analysis assistant. The following is a sample from a CSV dataset. Please generate comprehensive metadata to support structured analysis and ingestion into a metamodel. Ensure the metadata is well-organized, validated, and returned in JSON format. 
 
-    CSV data:
+    Here's what I need:
+    1. Dataset Overview:
+       - Total rows and columns.
+       - Total missing values across the dataset.
+       - Total unique values across the dataset.
+
+    2. Column-Level Analysis:
+       For each column, provide:
+       - Column name and data type (e.g., string, integer, float, date).
+       - Count of missing values and percentage of missing data.
+       - Count of unique values and percentage of unique values.
+       - For numerical columns: Minimum, maximum, mean, median, and standard deviation.
+
+    3. Quality Insights:
+       - Flag columns with more than 50% missing data.
+       - Identify potential outliers in numerical columns (using IQR or Z-score).
+
+    4. Dataset Schema:
+       - Return a schema that maps each column name to its data type, expected format (if applicable), and a short description.
+
+    CSV Data (Sample, truncated for large files):
     {csv_data[:1000]}
 
-    Please return structured metadata in JSON format.
+    Output format:
+    {{
+        "dataset_overview": {{
+            "total_rows": 0,
+            "total_columns": 0,
+            "total_missing_values": 0,
+            "total_unique_values": 0
+        }},
+        "columns": {{
+            "column_name": {{
+                "data_type": "string/integer/float",
+                "missing_values": 0,
+                "missing_percentage": 0.0,
+                "unique_values": 0,
+                "unique_percentage": 0.0,
+                "numerical_summary": {{
+                    "min": 0,
+                    "max": 0,
+                    "mean": 0.0,
+                    "median": 0.0,
+                    "std_dev": 0.0
+                }},
+                "flags": {{
+                    "high_missing_percentage": true/false,
+                    "potential_outliers": [1, 2, 3]
+                }}
+            }}
+        }}
+    }}
+    Ensure the output is valid JSON, easy to parse, and ready for ingestion.
     """
     payload = {
         "messages": [{"role": "user", "content": [ 
