@@ -11,7 +11,7 @@ import warnings
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# Set environment variables
+# Set environment variables (consider moving these to Lambda environment variables)
 os.environ['COGNITO_CLIENT_SECRET'] = '11181idr8ho95i6k67v99p3go2sn72kri5j5qdg2lo4jl0uj9ri4'
 os.environ['COGNITO_PASSWORD'] = 'Aarav@1209'
 os.environ['COGNITO_USERNAME'] = 'amatalia@asu.edu'
@@ -63,43 +63,14 @@ def get_cognito_token():
 # Prepare the message for the API request
 def prepare_message(csv_data):
     return """
-        Analyze the following CSV data and return ONLY a JSON object containing the in-depth data profiling analysis of the dataset. 
-        Do not include any explanatory text before or after the JSON. 
-        The JSON should be in the following exact format:
-
-        {
-        "columns": [
-            {
-            "name": "[Column Name]",
-            "data_type": "[Numerical/Categorical/Date/etc.]",
-            "missing_values": {
-                "count": [Count],
-                "percentage": [Percentage]
-            },
-            "statistics": {
-                "mean": [Value],
-                "median": [Value],
-                "mode": [Value],
-                "min": [Value],
-                "max": [Value]
-            },
-            "notes": "[Outliers, unusual distributions, or potential data quality issues]"
-            },
-            ...
-        ],
-        "similarity_analysis": {
-            "overlapping_columns": ["Column1", "Column2"],
-            "schema_matching": "[Description of schema similarities]"
-        },
-        "join_analysis": {
-            "common_fields": ["Field1", "Field2"],
-            "query": "SELECT [columns] FROM [Dataset1] JOIN [Dataset2] ON [common_field];",
-            "type": "[Inner/Outer/Left/Right]",
-            "use_case": "[Description of join's value]"
-        }
-        }
-
-        Here is the CSV data for analysis:
+        Analyze this CSV data and provide a detailed data profiling analysis. Focus on:
+        1. Column-level analysis including data types, missing values, and basic statistics
+        2. Data quality issues and potential anomalies
+        3. Distribution patterns and outliers
+        4. Relationships between columns
+        5. Potential join keys and data integration opportunities
+        
+        Format the response as a clean JSON without any markdown or explanatory text.
     """ + f"""{csv_data}"""
 
 # Chunk the data if necessary
@@ -118,7 +89,7 @@ def chunk_csv_data(csv_data, max_chunk_size=100000):
 
 # Directly calling the LiteLLM API
 def call_lite_llm_api(csv_data, bearer_token):
-    url = os.environ.get("litellm_proxy_endpoint", "https://api-llm.ctl-gait.clientlabsaft.com") + "/chat/completions"
+    url = os.environ.get("litellm_proxy_endpoint") + "/chat/completions"
     headers = {
         'Authorization': f'Bearer {bearer_token}',
         'x-api-key': os.environ.get('LITELLM_API_KEY')
@@ -126,61 +97,159 @@ def call_lite_llm_api(csv_data, bearer_token):
     payload = {
         "model": "Azure OpenAI GPT-4o (External)",
         "messages": [
-            {"role": "system", "content": "You are a data analysis assistant."},
+            {"role": "system", "content": "You are a data profiling specialist. Provide concise, accurate analysis."},
             {"role": "user", "content": prepare_message(csv_data)},
         ],
-        "temperature": 0.5,
+        "temperature": 0.3,
         "max_tokens": 2048
     }
 
-    # Make the API call
     response = requests.post(url, headers=headers, json=payload, verify=True)
     
-    # Check for success response
     if response.status_code == 200:
         return response.json()
     else:
-        raise Exception(f"Error from LiteLLM API: {response.status_code} - {response.text}")
+        raise Exception(f"LiteLLM API Error: {response.status_code} - {response.text}")
 
 # Lambda Handler: Entry point for the Lambda function
 def lambda_handler(event, context):
-    try:
-        # Retrieve the CSV data from the event or S3 bucket
-        file_path = event.get('file_path')  # or event['csv_data']
-        
-        # Read CSV data (or retrieve from S3, etc.)
-        csv_data = read_csv_to_string(file_path)
-        
-        # Chunk the data if needed
-        chunk_data = chunk_csv_data(csv_data)
-
-        # Get Cognito Token
-        bearer_token = get_cognito_token()
-
-        # Call LiteLLM API to analyze CSV data
-        responses = []
-        for chunk in chunk_data:
-            response = call_lite_llm_api(chunk, bearer_token)
-            responses.append(response)
-
-        # Merge all responses into a final report
-        merged_response = "\n".join([response.get("choices", [{}])[0].get("message", {}).get("content", "") for response in responses])
-
+    """Main Lambda Handler."""
+    # Match the metadata Lambda's CORS headers exactly
+    cors_headers = {
+        'Access-Control-Allow-Origin': 'http://localhost:5173',  # Specific origin instead of '*'
+        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET',
+        'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization',
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Expose-Headers': '*'
+    }
+    
+    # Handle preflight OPTIONS request - match metadata Lambda's approach
+    if event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
         return {
             'statusCode': 200,
-            'body': json.dumps({
-                'message': 'Data profiling completed successfully.',
-                'data_profiling_report': merged_response
-            })
+            'headers': cors_headers,
+            'body': ''
         }
+    
+    try:
+        # Parse the request body
+        print("Received event:", json.dumps(event))
+        
+        body = json.loads(event.get('body', '{}'))
+        file_name = body.get('fileName')  # Note: matches frontend's key name
+        
+        if not file_name:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': 'fileName is required in the request body'
+                })
+            }
+            
+        bucket_name = "uploadedcsvfiles"
+        
+        print(f"Processing file: {file_name} from bucket: {bucket_name}")
+        
+        try:
+            # Read CSV data
+            s3_client = boto3.client('s3')
+            response = s3_client.get_object(Bucket=bucket_name, Key=file_name)
+            csv_data = response['Body'].read().decode('utf-8')
+        except Exception as e:
+            print(f"Failed to read CSV: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': f'Failed to read CSV file: {str(e)}'
+                })
+            }
+            
+        try:
+            # Get Cognito token and process data
+            bearer_token = get_cognito_token()
+            chunks = chunk_csv_data(csv_data)
+            all_analyses = []
+
+            for chunk in chunks:
+                response = call_lite_llm_api(chunk, bearer_token)
+                content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                try:
+                    analysis = json.loads(content)
+                    all_analyses.append(analysis)
+                except json.JSONDecodeError:
+                    continue
+
+            final_analysis = merge_analyses(all_analyses)
+            
+            return {
+                'statusCode': 200,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': 'Data profiling completed successfully',
+                    'fileName': file_name,
+                    'analysis': final_analysis
+                })
+            }
+            
+        except Exception as e:
+            print(f"Failed to generate profiling: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'message': f'Failed to generate profiling: {str(e)}'
+                })
+            }
+        
     except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         return {
             'statusCode': 500,
+            'headers': cors_headers,
             'body': json.dumps({
-                'message': 'Failed to generate data profiling report.',
-                'error': str(e)
+                'message': f'Failed to process request: {str(e)}'
             })
         }
+
+def merge_analyses(analyses):
+    """
+    Intelligently merge multiple analyses into a single coherent report
+    """
+    if not analyses:
+        return {}
+    
+    merged = {
+        "columns": {},
+        "overall_statistics": {},
+        "relationships": [],
+        "data_quality_issues": []
+    }
+    
+    # Merge column analyses
+    for analysis in analyses:
+        for col_info in analysis.get("columns", []):
+            col_name = col_info.get("name")
+            if col_name not in merged["columns"]:
+                merged["columns"][col_name] = col_info
+            else:
+                # Update statistics if they exist
+                if "statistics" in col_info:
+                    merged["columns"][col_name]["statistics"].update(col_info["statistics"])
+                # Append unique notes
+                if "notes" in col_info:
+                    existing_notes = set(merged["columns"][col_name].get("notes", "").split(". "))
+                    new_notes = set(col_info["notes"].split(". "))
+                    merged["columns"][col_name]["notes"] = ". ".join(existing_notes.union(new_notes))
+
+    # Convert columns back to list
+    merged["columns"] = list(merged["columns"].values())
+    
+    return merged
 
 # Read CSV from S3 (if file_path is an S3 path)
 def read_csv_to_string(file_path):
