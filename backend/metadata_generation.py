@@ -182,18 +182,13 @@ def lambda_handler(event, context):
         csv_data = read_csv_from_s3(bucket_name, file_path)
         metadata = generate_metadata_via_llm(csv_data)
         
-        return {
-            'statusCode': 200,
-            'body': json.dumps(metadata)
-        }
+        # Return the metadata directly without wrapping it in another JSON object
+        return metadata
         
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'message': 'Failed to generate metadata.',
-                'error': str(e)
-            })
+            'message': 'Failed to generate metadata.',
+            'error': str(e)
         }
 
