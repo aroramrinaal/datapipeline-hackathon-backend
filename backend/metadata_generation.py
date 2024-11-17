@@ -69,97 +69,102 @@ def generate_metadata_via_llm(csv_data):
     """Generate metadata using LiteLLM."""
     lite_llm_url = "https://api-llm.ctl-gait.clientlabsaft.com/chat/completions"
     headers = {
+        "Content-Type": "application/json",
         "x-api-key": "Bearer sk-_UCJBhDuE_YPLi4B4gxASQ",
         "Authorization": f"Bearer {get_cognito_token()}"
     }
     prompt = f"""
-    You are a data analysis assistant. The following is a sample from a CSV dataset. Please generate comprehensive metadata to support structured analysis and ingestion into a metamodel. Ensure the metadata is well-organized, validated, and returned in JSON format. 
+    Analyze the following CSV data and return ONLY a JSON object containing metadata about the dataset. 
+    Do not include any explanatory text before or after the JSON.
+    The JSON should follow this exact structure:
 
-    Here's what I need:
-    1. Dataset Overview:
-       - Total rows and columns.
-       - Total missing values across the dataset.
-       - Total unique values across the dataset.
-
-    2. Column-Level Analysis:
-       For each column, provide:
-       - Column name and data type (e.g., string, integer, float, date).
-       - Count of missing values and percentage of missing data.
-       - Count of unique values and percentage of unique values.
-       - For numerical columns: Minimum, maximum, mean, median, and standard deviation.
-
-    3. Quality Insights:
-       - Flag columns with more than 50% missing data.
-       - Identify potential outliers in numerical columns (using IQR or Z-score).
-
-    4. Dataset Schema:
-       - Return a schema that maps each column name to its data type, expected format (if applicable), and a short description.
-
-    CSV Data (Sample, truncated for large files):
-    {csv_data[:1000]}
-
-    Output format:
     {{
         "dataset_overview": {{
-            "total_rows": 0,
-            "total_columns": 0,
-            "total_missing_values": 0,
-            "total_unique_values": 0
+            "total_rows": <number>,
+            "total_columns": <number>,
+            "total_missing_values": <number>,
+            "total_unique_values": <number>
         }},
         "columns": {{
-            "column_name": {{
-                "data_type": "string/integer/float",
-                "missing_values": 0,
-                "missing_percentage": 0.0,
-                "unique_values": 0,
-                "unique_percentage": 0.0,
+            "<column_name>": {{
+                "data_type": "<type>",
+                "missing_values": <number>,
+                "missing_percentage": <number>,
+                "unique_values": <number>,
+                "unique_percentage": <number>,
                 "numerical_summary": {{
-                    "min": 0,
-                    "max": 0,
-                    "mean": 0.0,
-                    "median": 0.0,
-                    "std_dev": 0.0
+                    "min": <number>,
+                    "max": <number>,
+                    "mean": <number>,
+                    "median": <number>,
+                    "std_dev": <number>
                 }},
                 "flags": {{
-                    "high_missing_percentage": true/false,
-                    "potential_outliers": [1, 2, 3]
+                    "high_missing_percentage": <boolean>,
+                    "potential_outliers": [<values>]
                 }}
             }}
         }}
     }}
-    Ensure the output is valid JSON, easy to parse, and ready for ingestion.
-    """
-    payload = {
-        "messages": [{"role": "user", "content": [ 
-                { 
-                    "type": "text", 
-                    "text": f"{prompt}"
-                } 
-            ] }],
-        "model": "Azure OpenAI GPT-4o (External)",
-        "temperature": 0,
-    }
-    try:
-        response = requests.post(lite_llm_url, headers=headers, data=json.dumps(payload), verify=True)
-        return response.text
-    except requests.exceptions.RequestException as e:
-        return str(e)
-        print(f"Error: {e}")
-        if e.response:
-            print(f"Response Status Code: {e.response.status_code}")
-            print(f"Response Content: {e.response.text}")
-        return None
 
+    CSV Data:
+    {csv_data[:1000]}
+    """
+    
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "model": "Azure OpenAI GPT-4o (External)",
+        "temperature": 0
+    }
+    
+    try:
+        response = requests.post(lite_llm_url, headers=headers, json=payload, verify=True)
+        response.raise_for_status()
+        response_json = response.json()
+        
+        if 'choices' not in response_json or not response_json['choices']:
+            raise ValueError("Invalid response format from LLM")
+            
+        metadata_content = response_json['choices'][0]['message']['content']
+        
+        # Clean the response - remove any markdown formatting if present
+        metadata_content = metadata_content.replace('```json', '').replace('```', '').strip()
+        
+        # Parse the JSON
+        metadata = json.loads(metadata_content)
+        return metadata
+            
+    except Exception as e:
+        print(f"Error in generate_metadata_via_llm: {str(e)}")
+        raise
 
 def save_metadata_to_s3(bucket_name, file_key, metadata):
     """Save metadata as a JSON file in S3."""
     try:
         s3_client = boto3.client('s3')
+        # Create metadata file key by replacing .csv with _metadata.json
         metadata_file_key = file_key.replace(".csv", "_metadata.json")
+        
+        # Ensure metadata is properly formatted JSON
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                raise Exception("Invalid JSON format in metadata")
+        
+        # Convert to formatted JSON string
+        metadata_json = json.dumps(metadata, indent=2)
+        
+        # Upload to S3
         s3_client.put_object(
             Bucket=bucket_name,
             Key=metadata_file_key,
-            Body=json.dumps(metadata, indent=2),
+            Body=metadata_json,
             ContentType="application/json"
         )
         return metadata_file_key
@@ -169,27 +174,22 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
 def lambda_handler(event, context):
     """Main Lambda Handler."""
     try:
-        # Extract S3 Bucket and File Path from Event
+        if 'file_path' not in event:
+            raise Exception("file_path is required in the event")
+            
         file_path = event['file_path']
         bucket_name = "uploadedcsvfiles"
         
-        # Read the CSV file
         csv_data = read_csv_from_s3(bucket_name, file_path)
-        
-        # Generate Metadata via LLM
         metadata = generate_metadata_via_llm(csv_data)
-
-        # Save metadata to a s3
-        metadata_file_key = save_metadata_to_s3(bucket_name, file_path, metadata)
         
         return {
             'statusCode': 200,
-            'body': json.dumps({
-                'message': 'Metadata generated successfully.',
-                'metadata': metadata
-            })
+            'body': json.dumps(metadata)
         }
+        
     except Exception as e:
+        print(f"Error occurred: {str(e)}")
         return {
             'statusCode': 500,
             'body': json.dumps({
