@@ -153,6 +153,9 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
         # Create metadata file key by replacing .csv with _metadata.json
         metadata_file_key = file_key.replace(".csv", "_metadata.json")
         
+        print(f"Original CSV file: {file_key}")
+        print(f"Generated metadata file name: {metadata_file_key}")
+        
         # Convert to formatted JSON string with nice indentation
         metadata_json = json.dumps(metadata, indent=2)
         
@@ -163,8 +166,10 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
             Body=metadata_json,
             ContentType="application/json"
         )
+        print(f"Successfully saved metadata to S3: {metadata_file_key}")
         return metadata_file_key
     except Exception as e:
+        print(f"Error saving metadata: {str(e)}")
         raise Exception(f"Failed to save metadata to S3: {e}")
 
 def lambda_handler(event, context):
