@@ -153,14 +153,7 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
         # Create metadata file key by replacing .csv with _metadata.json
         metadata_file_key = file_key.replace(".csv", "_metadata.json")
         
-        # Ensure metadata is properly formatted JSON
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except json.JSONDecodeError:
-                raise Exception("Invalid JSON format in metadata")
-        
-        # Convert to formatted JSON string
+        # Convert to formatted JSON string with nice indentation
         metadata_json = json.dumps(metadata, indent=2)
         
         # Upload to S3
@@ -175,84 +168,63 @@ def save_metadata_to_s3(bucket_name, file_key, metadata):
         raise Exception(f"Failed to save metadata to S3: {e}")
 
 def lambda_handler(event, context):
-    """Main Lambda Handler."""
-    # Updated CORS headers with specific allowed headers
-    cors_headers = {
-        'Access-Control-Allow-Origin': 'http://localhost:5173',
-        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET',
-        'Access-Control-Allow-Headers': 'Content-Type,X-Api-Key,Authorization',  # Explicitly list allowed headers
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Expose-Headers': '*'
-    }
-    
-    # Handle preflight OPTIONS request
-    if event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
-        return {
-            'statusCode': 200,
-            'headers': cors_headers,
-            'body': ''
-        }
-    
+    """Main Lambda Handler for S3 triggers."""
     try:
-        # Parse the request body
         print("Received event:", json.dumps(event))
         
-        body = json.loads(event.get('body', '{}'))
-        file_path = body.get('file_path')
+        # Extract bucket and file information from S3 event
+        s3_event = event['Records'][0]['s3']
+        bucket_name = s3_event['bucket']['name']
+        file_key = s3_event['object']['key']
         
-        if not file_path:
-            return {
-                'statusCode': 400,
-                'headers': cors_headers,
-                'body': json.dumps({
-                    'message': 'file_path is required in the request body'
-                })
-            }
-            
-        bucket_name = "uploadedcsvfiles"
+        print(f"Processing S3 event - Bucket: {bucket_name}, File: {file_key}")
         
-        print(f"Processing file: {file_path} from bucket: {bucket_name}")
-        
-        try:
-            csv_data = read_csv_from_s3(bucket_name, file_path)
-        except Exception as e:
-            print(f"Failed to read CSV: {str(e)}")
+        # Only process CSV files
+        if not file_key.lower().endswith('.csv'):
+            print(f"Skipping non-CSV file: {file_key}")
             return {
-                'statusCode': 500,
-                'headers': cors_headers,
+                'statusCode': 200,
                 'body': json.dumps({
-                    'message': f'Failed to read CSV file: {str(e)}'
-                })
-            }
-            
-        try:
-            metadata = generate_metadata_via_llm(csv_data)
-        except Exception as e:
-            print(f"Failed to generate metadata: {str(e)}")
-            return {
-                'statusCode': 500,
-                'headers': cors_headers,
-                'body': json.dumps({
-                    'message': f'Failed to generate metadata: {str(e)}'
+                    'message': 'Skipped non-CSV file'
                 })
             }
         
-        return {
+        # Read CSV data
+        print("Starting to read CSV data")
+        csv_data = read_csv_from_s3(bucket_name, file_key)
+        print("Successfully read CSV data")
+        
+        # Generate metadata
+        print("Starting metadata generation")
+        metadata = generate_metadata_via_llm(csv_data)
+        print("Successfully generated metadata")
+        
+        # Save metadata back to S3
+        print("Starting to save metadata to S3")
+        metadata_file_key = save_metadata_to_s3(bucket_name, file_key, metadata)
+        print(f"Successfully saved metadata to: {metadata_file_key}")
+        
+        response = {
             'statusCode': 200,
-            'headers': cors_headers,
-            'body': json.dumps(metadata)
+            'body': json.dumps({
+                'message': 'Successfully generated and saved metadata',
+                'metadata_file': metadata_file_key,
+                'metadata': metadata
+            })
         }
+        print(f"Lambda execution completed successfully: {json.dumps(response)}")
+        return response
         
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        return {
+        error_response = {
             'statusCode': 500,
-            'headers': cors_headers,
             'body': json.dumps({
                 'message': f'Failed to process request: {str(e)}'
             })
         }
+        print(f"Error occurred: {str(e)}")
+        print(f"Error response: {json.dumps(error_response)}")
+        import traceback
+        traceback.print_exc()
+        return error_response
 
