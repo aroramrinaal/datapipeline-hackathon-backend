@@ -33,7 +33,7 @@ def drop_table_if_exists(cursor, table_name):
 
 def create_dynamic_table(cursor, table_name, columns):
     """Dynamically create a table based on the column names and data types"""
-    columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])  # All columns as TEXT, can adjust if needed
+    columns_sql = ", ".join([f'"{col}" TEXT' for col in columns])
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS "{table_name}" (
         "id" SERIAL PRIMARY KEY,

@@ -20,7 +20,7 @@ def lambda_handler(event, context):
             'body': ''
         }
 
-    # The file content is assumed to be passed in the 'body' of the event, base64-encoded
+
     file_content = event.get("body")
     file_name = event.get("queryStringParameters", {}).get("file_name", "")
     request_type = event.get("queryStringParameters", {}).get("request_type", "upload")
